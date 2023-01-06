@@ -1,6 +1,6 @@
 numpy
 pandas
-bpy
+opencv-python
 bpycv
 ruamel.yaml
 pyntcloud
