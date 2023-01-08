@@ -17,7 +17,7 @@ for i = 2:N
     E = [R T; 0 0 0 1];
 
     pc = read_ply(path);
-    hom = ones(1, 100000);
+    hom = ones(1, size(pc.x)(1));
     pc_points = U*[pc.x pc.y pc.z]'; % from blender_cam coords to cv_cam coords
     pc_points = [pc_points; hom];
 
