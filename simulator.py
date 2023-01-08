@@ -45,7 +45,7 @@ parser.add_argument("save_dir", metavar="OUTPUT", type=str, help="Output path fo
 parser.add_argument("n_imgs", metavar="N_IMAGES", default=50, type=int, help="Number of samples to acquire (defaults to 50)")
 parser.add_argument("--subsamples", metavar="SUBSAMPLES", default=100_000, type=int, help="Number of random points to save after 3D scan")
 parser.add_argument("--random", action="store_true", help="Render from random poses around the object instead of following the default scanning path")
-args = parser.parse_args(sys.argv[4:])  # skip "blender.exe", "-b", "--python", "simulator.py"
+args = parser.parse_args()  # sys.argv[4:])  # skip "blender.exe", "-b", "--python", "simulator.py"
 
 # INPUTS ###########################################################################
 FILE_MESH = Path(args.file_mesh).resolve()  # CURRENT_DIR / "input" / "dante.stl"
