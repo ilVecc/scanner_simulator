@@ -1,9 +1,9 @@
+pip
+tqdm
 numpy
 pandas
 opencv-python
+bpy
 bpycv
 ruamel.yaml
 pyntcloud
-tqdm
-bpy
-pip

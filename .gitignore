@@ -133,6 +133,7 @@ dmypy.json
 
 
 # Blender
-*.blend1
-output/
-octave/merged.ply
+_inputs/
+_backgrounds/
+_wasteland/
+view_clouds/*.ply

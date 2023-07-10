@@ -1,277 +1,388 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# Import of useful packages
+# TAKE A LOOK AT
+# https://github.com/google-research/kubric
 
-import cv2
+
+# Import of useful packages
 import bpy
-import bpycv
-#import boxx
-import random
-from tqdm import tqdm
-import numpy as np
-import pandas as pd
-import math as m
+import bpycv  # creates a default world (with the usual cube)
 import mathutils
+#import boxx
+import cv2
+import numpy as np
+rnd = np.random.default_rng()
+import argparse
+
+from tqdm import tqdm
 from pathlib import Path
-from pyntcloud import PyntCloud
 
 import sys
 sys.path.append(str(Path(bpy.data.filepath).parent))
 
-from utils import *
+from utils.misc import *
+from utils.blender import *
+from utils.camera import *
+from utils.dataset_creator import *
+from utils.trajectory import *
 
 CURRENT_DIR = Path(__file__).resolve().parent  # this results in either the .blend file or the directory
 if CURRENT_DIR.suffix == ".blend":
     CURRENT_DIR = CURRENT_DIR.parent  # double  .parent  because .py file is (apparently) inside the .blend file
 
+# https://docs.blender.org/api/current/info_gotcha.html
 # https://docs.blender.org/manual/en/2.79/render/workflows/command_line.html
-# blender --background --python SCRIPT.py
 
 # https://docs.blender.org/manual/en/latest/advanced/scripting/addon_tutorial.html
 # https://docs.blender.org/manual/en/3.2/addons/add_curve/extra_objects.html#
 # __import__("addons_utils").enable("add_curve_extra_objects")
 # bpy.ops.curve.spirals(spiral_type='ARCH', spiral_direction='COUNTER_CLOCKWISE', turns=1, steps=24, radius=1, dif_z=0, dif_radius=0, B_force=1, inner_radius=0.2, dif_inner_radius=0, cycles=1, curves_number=1, touch=False, shape='3D', curve_type='POLY', use_cyclic_u=False, endp_u=True, order_u=4, handleType='VECTOR', edit_mode=True, startlocation=(0, 0, 0), rotation_euler=(0, 0, 0))
 
-import argparse
 
-parser = argparse.ArgumentParser(
-    prog="ScanSim",
-    description="Blender 3D scanner simulator for Point Cloud and RGB-D synthetic dataset creation",
-)
-parser.add_argument("file_mesh", metavar="MESH", type=str, help="STL file path of the object to be scanned")
-parser.add_argument("file_params", metavar="PARAMS", type=str, help="YAML file path of the camera parameters")
-parser.add_argument("save_dir", metavar="OUTPUT", type=str, help="Output path for the dataset")
-parser.add_argument("n_imgs", metavar="N_IMAGES", default=50, type=int, help="Number of samples to acquire (defaults to 50)")
-parser.add_argument("--subsamples", metavar="SUBSAMPLES", default=100_000, type=int, help="Number of random points to save after 3D scan")
-parser.add_argument("--random", action="store_true", help="Render from random poses around the object instead of following the default scanning path")
-args = parser.parse_args(sys.argv[4:])  # skip "blender.exe", "-b", "--python", "simulator.py"
-
-# INPUTS ###########################################################################
-FILE_MESH = Path(args.file_mesh).resolve()  # CURRENT_DIR / "input" / "dante.stl"
-FILE_PARAMS = Path(args.file_params).resolve()  # CURRENT_DIR / "input" / "params.yml"
-# W, H = 5472, 3648
-####################################################################################
-
-def _barrel_positioning(radius, height, t_angle, t_height):
-    angle = 2 * m.pi * t_angle
-    r = radius * (m.sin(m.pi * t_height) * 0.25 + 0.75)  # TODO add some randomness here
-    x, y = r * m.cos(angle), r * m.sin(angle)
-    z = height * (t_height - 0.5)  # wrt z=0 (the same as the object origin)
-    return x, y, z
-
-
-def traj_random_barrel(t, min_radius, obj_focused):
-    t_angle = random.uniform(0, 1)
-    t_height = random.uniform(0, 1)
-    return _barrel_positioning(1.5 * min_radius, 1.5 * obj_focused.dimensions.z, t_angle, t_height)
-
-
-def traj_spiral_barrel(t, min_radius, obj_focused):
-    return _barrel_positioning(1.5 * min_radius, 1.5 * obj_focused.dimensions.z, t, t)
-
-
-# handy variables ##################################################################
-SAVE_DIR = Path(args.save_dir).resolve()  # CURRENT_DIR / "output"
-SAVE_DIR.mkdir(exist_ok=True)
-SAVE_DIR_IMAGES = SAVE_DIR / "images"
-SAVE_DIR_IMAGES.mkdir(exist_ok=True)
-SAVE_DIR_DEPTHS = SAVE_DIR / "depth"
-SAVE_DIR_DEPTHS.mkdir(exist_ok=True)
-SAVE_DIR_ANNOTS = SAVE_DIR / "annotations"
-SAVE_DIR_ANNOTS.mkdir(exist_ok=True)
-SAVE_DIR_CLOUDS = SAVE_DIR / "point_clouds"
-SAVE_DIR_CLOUDS.mkdir(exist_ok=True)
-####################################################################################
-
-# set metric units and meter as base (for depth images)
-bpy.context.scene.unit_settings.system = 'METRIC'
-bpy.context.scene.unit_settings.scale_length = 1.0
-
-# remove all MESH objects and de-select/-activate everything
-# Blender default file (userpref.blend) contains three objects: Camera, Cube, and Light
-# this actively removes the previously used mesh when launching the script from Blender,
-# and the default Cube when launching the script from CLI, leaving only Camera and Light
-[bpy.data.objects.remove(obj) for obj in bpy.data.objects if obj.type == "MESH"]
-bpy.context.view_layer.objects.active = None
-# https://blender.stackexchange.com/questions/99664
-for obj in bpy.context.scene.objects:
-    obj.select_set(False)
-
-# load custom object at world origin (this also activates, and thus selects, the object)
-bpy.ops.import_mesh.stl(filepath=str(FILE_MESH))
-obj_name = str(FILE_MESH.stem)
-obj = bpy.data.objects[obj_name]
-# set the object origin to its geometrical center, and place it at the world origin
-# obj.select_set(True)  # selection is needed for the following command, but the object is already selected when just imported
-bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='BOUNDS')
-bpy.ops.object.location_clear(clear_delta=False)
-# give the object a unique id for annotation and 6D pose with bpycv
-obj["inst_id"] = 1
-
-
-###
-# CAMERA AND LIGHT SETUP
-###
-cam = bpy.data.cameras["Camera"]
-light = bpy.data.lights["Light"]
-obj_cam = bpy.data.objects["Camera"]
-obj_light = bpy.data.objects["Light"]
-# load intrinsics from file
-K, f = load_intrinsics(FILE_PARAMS)
-# setup camera intrinsics
-H, W = set_cam_intrinsics(K, f, cam=cam)
-# setup camera frustum (for Z-buffer)
-cam.clip_start = 0.1
-cam.clip_end = 100
-# setup world background
-bpy.context.scene.world.use_nodes = False
-bpy.context.scene.world.color = mathutils.Color((0, 0, 0))
-
-
-# prepare dataframe
-df_columns = [
-    # info
-    "mesh_name",
-    "path_image",
-    "path_depth",
-    "path_annot",
-    "path_cloud",
-    # I matrix
-    "K_fx", "K_fy", "K_cx", "K_cy", "K_s"
-] + [
-    # E matrix
-    f"E_R{i}{j}" for i in range(1,4) for j in range(1,4)
-] + [
-    f"E_T{i}" for i in range(1,4)
-] + [
-    # obj2cam matrix
-    f"P_R{i}{j}" for i in range(1,4) for j in range(1,4)
-] + [
-    f"P_T{i}" for i in range(1,4)
-] + [
-    # vertices in bb2obj space
-    i 
-    for l in [[f"BB_{w}{i}" for w in ["x", "y", "z"]] for i in range(8)] 
-    for i in l
-]
-
-
-N_IMAGES = args.n_imgs
-SUBSAMPLES = args.subsamples
-CAMERA_POSITIONING = traj_random_barrel if args.random else traj_spiral_barrel
-
-# orbit around the object
-cam_min_radius = minimum_cam_distance_cam(cam, obj)
-# setup lighting
-light.shadow_soft_size = cam_min_radius / 2
-light.energy = 2000
-
-# U is the conversion matrix from Blender to "standrd computer vision" reference system
-# more on: https://blender.stackexchange.com/questions/86398/
-U = np.diag([1, -1, -1])
-
-info_poses = pd.DataFrame(columns=df_columns)
-subsamples = min(SUBSAMPLES, H * W)
-for i in tqdm(range(N_IMAGES)):
-    
-    path_image = str(SAVE_DIR_IMAGES / f"img_{i}.png")
-    path_depth = str(SAVE_DIR_DEPTHS / f"depth_{i}.png")
-    path_annot = str(SAVE_DIR_ANNOTS / f"annotations_{i}.png")
-    path_cloud = str(SAVE_DIR_CLOUDS / f"cloud_{i}.ply")
-    
-    # move camera and light around object
-    t = i / max(1, (N_IMAGES - 1))
-    obj_cam.location = CAMERA_POSITIONING(t, cam_min_radius, obj)
-    obj_light.location = obj_cam.location + mathutils.Vector([0, 0, 0.1])
-    
-    # point towards the object
-    look_at(obj_cam, obj)
-    
-    ###########################################################
-    # DEBUGGING PURPOSES (update the viewport)
-    # works only when Blender is in windowed mode (not in CLI)
-    #bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
-    ###########################################################
-    
-    # render image, instance annotation and depth in one line code
-    with stdout_redirected():
-        frame_data = bpycv.render_data()
-    image = frame_data["image"]
-    depth = frame_data["depth"]  # in meters
-    annot = frame_data["inst"]
-    pose = frame_data["ycb_6d_pose"]  # 6D pose in YCB format
-    
-    
-    ### 
-    # IMAGE, DEPTH and ANNOTATIONS
-    ###
-    cv2.imwrite(path_image, image)
-    cv2.imwrite(path_depth, depth)
-    cv2.imwrite(path_annot, annot)
-    
-    
-    ### 
-    # POINT CLOUD
-    ###
-    u, v = np.meshgrid(np.arange(W), np.arange(H), indexing="xy")
-    # filter clipped points (they are outside frustum, Blender sets their value to 0) 
-    u, v, z = u[depth > 0], v[depth > 0], depth[depth > 0]
-    # random subsampling of pixels
-    idxs = random.choices(np.arange(u.shape[0]), k=subsamples)
-    u, v, z = u[idxs], v[idxs], z[idxs]
-    
-    # anti-project the homogeneous points and select the colors
-    p = np.vstack([u, v, np.ones(u.shape)])
-    points = U @ np.linalg.inv(K) @ p * z
-    colors = image[v, u, :]
-
-    cloud = PyntCloud(
-        pd.DataFrame(
-            # same arguments that you are passing to visualize_pcl
-            columns=["x", "y", "z", "red", "green", "blue"],
-            data=np.hstack((points.T, colors))
-        )
+def parse_args(args):
+    parser = argparse.ArgumentParser(
+        prog="ScanSim",
+        description="Blender 3D scanner simulator for Point Cloud and RGB-D synthetic dataset creation",
     )
-    cloud.to_file(path_cloud)
+    parser.add_argument("outdir", metavar="OUTDIR", 
+                        type=str, 
+                        help="Output path for the datasets (grouped by mesh by default)")
+    parser.add_argument("examples", metavar="EXAMPLES", 
+                        type=int, default=1000, 
+                        help="Number of samples to acquire for each mesh (defaults to 1000)")
+    parser.add_argument("-M", "--meshes", metavar="MESHES", 
+                        type=str, nargs='+', required=True,
+                        help="STL/GLB/OBJ filepaths of the objects to be scanned (individually)")
+    parser.add_argument("-P", "--params", metavar="PARAMS", 
+                        type=str, nargs='+', required=True,
+                        help="YAML filepaths of the camera parameters (randomly chosen during scanning)")
+    parser.add_argument("-n", "--mesh_names", metavar="MESH_NAMES", 
+                        type=str, nargs='+', default=None,
+                        help="Force a specific name for each mesh")
+    parser.add_argument("-m", "--meters", 
+                        action="store_true",
+                        help="Use meter unit instead of millimiter (because the meshes are given in meter unit)")
+    parser.add_argument("-s", "--samples", metavar="SAMPLES", 
+                        type=int, default=1500, 
+                        help="Number of random points to save after 3D scan")
+    parser.add_argument("-t", "--trajectory", metavar="TRAJECTORY", 
+                        type=str, choices=["random_barrel", "random_sphere", "spiral_barrel"], default="spiral_barrel", 
+                        help="Select the scanning trajectory")
+    parser.add_argument("-b", "--backgrounds", metavar="BACKGROUNDS", 
+                        type=str, nargs='*', default=None, 
+                        help="Path for the optional backgound images")
+    parser.add_argument("-d", "--depth_ambiguity", metavar="AMBIGUITY", 
+                        type=float, default=0.0, 
+                        help="Probability of repeating the previous pose with a different f/z setup")
+    parser.add_argument("-j", "--jiggle_camera", metavar="JIGGLE", 
+                        type=float, default=0.0, 
+                        help="Magnitude of the xyz-translation noise of the camera from the trajectory")
+    parser.add_argument("-z", "--zoom", metavar="ZOOM", 
+                        type=float, default=1.0, 
+                        help="Amplification of the automatically calculated minimum cam distance")
+    parser.add_argument("-hw", "--resolution", metavar="HW", 
+                        type=int, nargs="2", default=None, 
+                        help="Resolution of the image")
+        
+    parser_dataset = parser.add_subparsers(dest='dataset_type', help='Arguments for specific dataset type output')
+    parser_dataset.required = False
+    
+    parser_simple = parser_dataset.add_parser('simple')
+    parser_simple.add_argument('--classes', metavar="SIMPLE_CLASSES",
+                               type=str, nargs="?", const="opt_classes", default="opt_total", 
+                               help='Split size of the dataset')
+    parser_simple.add_argument('--split', metavar="SIMPLE_SPLIT",
+                               type=float, default=0.8, 
+                               help='Split size of the dataset')
+
+    args = parser.parse_args(args)
+    return args
 
 
-    ###
-    # 6D POSES
-    ###
-    #  ycb_6d_pose: dict  10
-    #    ├── intrinsic_matrix: (3, 3)float32
-    #    ├── world_to_cam: (4, 4)float32      # pose of world wrt camera (extrinsics E in standard computer vision convention)
-    #    ├── cam_matrix_world: (4, 4)float64  # pose of camera wrt world (cam2world  inv(E) and necessary adjustments)
-    #    ├── inst_ids: list  1
-    #    │   └── 0: 1
-    #    ├── areas: list  1
-    #    │   └── 0: 3095214
-    #    ├── visibles: list  1
-    #    │   └── 0: True
-    #    ├── poses: (3, 4, 1)float64
-    #    ├── 6ds: list  1                     # poses of object wrt camera (obj2cam)
-    #    │   └── 0: (3, 4)float64
-    #    ├── bound_boxs: list  1              # box vertices wrt obj (bb2obj)
-    #    │   └── 0: (8, 3)float64
-    #    └── mesh_names: list  1
-    #        └── 0: dante
-    name, I, E, P, BB = pose["mesh_names"][0], pose["intrinsic_matrix"], pose["world_to_cam"], pose["6ds"][0], pose["bound_boxs"][0]
-    info_poses_this = pd.DataFrame(
-        columns=df_columns,
-        data=np.array([[
-            name,            
-            path_image, path_depth, path_annot, path_cloud,
-            *extract_K(I), *extract_E(E), *extract_E(P),
-            *BB[0], *BB[1], *BB[2], *BB[3], *BB[4], *BB[5], *BB[6], *BB[7]
-        ]])  # this needs to be a 2D array, thus the [[ ]]
-    )
-    info_poses = pd.concat([info_poses, info_poses_this], ignore_index=True)
-
-info_poses.reset_index()
-info_poses.to_csv(str(SAVE_DIR / "poses.csv"))
+def get_camera_positioner(traj):
+    if traj == "random_barrel":
+        camera_positioning = traj_random_barrel
+    elif traj == "spiral_barrel":
+        camera_positioning = traj_spiral_barrel
+    elif traj == "random_sphere":
+        camera_positioning = traj_random_sphere
+    else:
+        raise RuntimeError("No such trajectory exists")
+    return camera_positioning
 
 
-# quick and easy render
-#bpy.context.scene.render.filepath = str((PNG_PATH / str(inst_id)).with_suffix(".png"))
-#bpy.ops.render.render(write_still=True)
+def get_random_camera_setup(filepaths):
+    camera_model_name = rnd.choice(list(filepaths.keys()))
+    K, f = load_intrinsics(filepaths[camera_model_name])
+    return K, f, camera_model_name
+
+
+def main(args):
+
+    args = parse_args(args)
+
+    # ARGS ############################################################################
+    MESHES = [Path(mesh).resolve() for mesh in args.meshes]
+    if len(MESHES) == 1 and MESHES[0].is_dir():
+        MESHES = list(MESHES[0].glob("*.[glb obj stl]*"))
+    for mesh in MESHES:
+        if mesh.suffix not in [".glb", ".obj", ".stl"]:
+            raise argparse.ArgumentError(f"{mesh.suffix} is currently not supported")
+    if args.mesh_names is not None:
+        if len(args.mesh_names) != len(MESHES):
+            raise argparse.ArgumentError("The provided names do not match the provided meshes")
+        NAMES = args.mesh_names
+    else:
+        NAMES = [path.stem for path in MESHES]
+    PARAMS = [Path(params).resolve() for params in args.params]
+    if len(PARAMS) == 1 and PARAMS[0].is_dir():
+        PARAMS = list(PARAMS[0].glob("params_*.yml"))
+    for params in PARAMS:
+        if not params.match("params_*.yml"):
+            raise argparse.ArgumentError("Parameters filenames must be params_CAMERANAME.yml")
+    PARAMS = {path.stem.split("_", 1)[1]: path for path in PARAMS}
+    if len(PARAMS) == 0:
+        raise argparse.ArgumentError("No parameter files found!")
+    HW = tuple([abs(v) for v in args.resolution])
+    
+    OUTDIR = Path(args.outdir).resolve()
+    OUTDIR.mkdir(parents=True, exist_ok=True)
+
+    BACKGROUNDS = []
+    if args.backgrounds:
+        for bg_path in args.backgrounds:
+            bg_path = Path(bg_path).resolve()
+            BACKGROUNDS += [bg_path] if bg_path.is_file() else list(bg_path.iterdir())
+    
+    EXAMPLES = args.examples
+    ANNOT_ID = 1
+    CLOUD_SAMPLES = args.samples
+    DEPTH_AMBIGUITY = np.clip(args.depth_ambiguity, 0.0, 1.0)
+    DEPTH_ZOOM = np.max([0.0, args.zoom])
+    ####################################################################################
+
+    # set metric units and meter as base (for depth images)
+    bpy.context.scene.unit_settings.system = 'METRIC'
+    bpy.context.scene.unit_settings.scale_length = 1.0 if args.meters else 0.001
+    bpy.context.scene.unit_settings.length_unit = 'METERS' if args.meters else 'MILLIMETERS'
+
+    # Blender default file (userpref.blend) contains three objects: Camera, Cube, and Light
+    # here we remove the default Cube, leaving only Camera and Light
+    [bpy.data.objects.remove(obj) for obj in bpy.data.objects if obj.type == "MESH"]
+    # de-select/-activate everything
+    deselect_everything()
+
+
+    # CAMERA AND LIGHT SETUP
+    cam = bpy.data.cameras["Camera"]
+    light = bpy.data.lights["Light"]
+    obj_cam = bpy.data.objects["Camera"]
+    obj_light = bpy.data.objects["Light"]
+    # setup world background
+    bpy.context.scene.world.use_nodes = False
+    bpy.context.scene.world.color = mathutils.Color((0, 0, 0))
+    # trajectory
+    CAMERA_POSITIONING = get_camera_positioner(args.trajectory)
+    cam.clip_start = 0.1
+    # light
+    light_intensity = 25.00
+
+    for i, mesh in enumerate(MESHES):
+        
+        # TODO this feels very wrong, and should be removed to 
+        with suppress_stdout():
+
+            ##################################
+            #              SETUP             #
+            ##################################
+
+            name = NAMES[i]
+            OUTDIR_OBJ = OUTDIR / name
+            OUTDIR_OBJ.mkdir(exist_ok=True)
+
+            # TODO with suppress_stdout():
+            # load custom object at world origin (this also activates, and thus selects, the object)
+            obj = import_objects(mesh, name)
+            # selection is needed for the following command, but the object is already selected when just imported
+            bpy.ops.object.location_clear(clear_delta=True)
+            # give the object a unique id for annotation and 6D pose with bpycv
+            for o in list(walk_children(obj)) + [obj]: 
+                o["inst_id"] = ANNOT_ID
+
+            ##################################
+            #              SCAN              #
+            ##################################
+
+            # absolute paths
+            paths = {
+                "info":  str(OUTDIR_OBJ / f"{name}.csv"),
+                "blend": str(OUTDIR_OBJ / f"{name}.blend"),
+                "mesh":  str(OUTDIR_OBJ / f"{name}{mesh.suffix}")
+            }
+
+            # orbit around the object
+            obj_dims = walk_dimensions(obj)
+            cam_min_radius = 1.25 * minimum_cam_distance_cam(cam, obj_dims) / DEPTH_ZOOM
+            # setup camera frustum (for Z-buffer)
+            cam.clip_end = 10.0 *  DEPTH_ZOOM * cam_min_radius  # * ((max(obj_dims) * SCALE) / args.jiggle_camera)
+            # setup lighting
+            light.shadow_soft_size = 2 * cam_min_radius
+            light.energy = 4*np.pi*light_intensity * cam_min_radius ** 2
+
+            # prepare dataframe
+            info_poses = create_info()
+            done_ambiguity = True
+
+            # copy the mesh object
+            deselect_everything()
+            obj.select_set(True)
+            bpy.ops.export_scene.obj(filepath=str(paths["mesh"]), use_selection=True, use_materials=True)
+
+            # create output directories
+            IMAGES_DIR = Path("images")
+            (OUTDIR_OBJ / IMAGES_DIR).mkdir(exist_ok=True)
+            DEPTHS_DIR = Path("depths")
+            (OUTDIR_OBJ / DEPTHS_DIR).mkdir(exist_ok=True)
+            ANNOTS_DIR = Path("annots")
+            (OUTDIR_OBJ / ANNOTS_DIR).mkdir(exist_ok=True)
+            CLOUDS_DIR = Path("clouds")
+            (OUTDIR_OBJ / CLOUDS_DIR).mkdir(exist_ok=True)
+
+            # TODO for some weird reason, this prints even with the stdout redirect... magic...
+            for i in tqdm(range(EXAMPLES), desc=name):
+                            
+                # load intrinsics from file
+                K, f, camera_model_name = get_random_camera_setup(PARAMS)
+                H, W = set_cam_intrinsics(K, f, HW, cam=cam)
+                subsamples = min(CLOUD_SAMPLES, H * W)
+                
+                # relative paths
+                rel_paths = {
+                    "image": str(IMAGES_DIR / f"{i}.png"),
+                    "depth": str(DEPTHS_DIR / f"{i}.png"),
+                    "annot": str(ANNOTS_DIR / f"{i}.png"),
+                    "cloud": str(CLOUDS_DIR / f"{i}.ply") if subsamples > 0 else ""
+                }
+                paths.update(rel_paths)
+
+                # apply depth ambiguity if requested
+                if done_ambiguity or rnd.uniform(0, 1) > DEPTH_AMBIGUITY:
+                    # move camera and light around object and point towards object
+                    t = i / max(1, (EXAMPLES - 1))
+                    CAMERA_POSITIONING(t, cam_min_radius, obj, obj_cam, args.jiggle_camera)
+                    obj_light.location = obj_cam.location
+                    
+                    # choose a background image
+                    if BACKGROUNDS:
+                        bg_img = rnd.choice(BACKGROUNDS)
+                    done_ambiguity = False
+                else:
+                    # TODO check sw vs fx
+                    z_direction = obj_cam.location.normalized()
+                    z_distance_from_obj = obj_cam.location.length
+                    depth_ratio = f / z_distance_from_obj
+                    new_z_distance_from_obj = z_distance_from_obj * rnd.uniform(1.0, 1.25)
+                    new_f = new_z_distance_from_obj * depth_ratio
+                    # set iso-perspective setup
+                    cam.lens = new_f
+                    obj_cam.location = z_direction * new_z_distance_from_obj
+                    done_ambiguity = True
+
+                ###########################################################
+                # DEBUGGING PURPOSES (update the viewport)
+                # works only when Blender is in windowed mode (not in CLI)
+                #bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+                ###########################################################
+                
+                # # quick and easy render
+                # bpy.context.scene.render.filepath = paths["image"]
+                # bpy.ops.render.render(write_still=True)
+                
+                # TODO with suppress_stdout():
+                # render image, instance annotation and depth in one line code
+                frame_data = bpycv.render_data()
+
+                # since we are saving everything in CV convention, we need to flip the vertical direction due to the 
+                # difference between the Blender and CV cameras
+                image = np.flipud(frame_data["image"])
+                depth = np.flipud(frame_data["depth"])  # in meters
+                annot = np.flipud(frame_data["inst"])
+                pose = frame_data["ycb_6d_pose"]  # 6D pose in YCB format
+                
+                ### 
+                # IMAGE, DEPTH and ANNOTATIONS
+                ###
+
+                # add a random pre-loaded image
+                if BACKGROUNDS:
+                    image = add_background(image, annot == ANNOT_ID, bg_img)
+
+                cv2.imwrite(str(OUTDIR_OBJ / rel_paths["image"]), image[:,:,::-1])  # BGR to RGB
+                cv2.imwrite(str(OUTDIR_OBJ / rel_paths["depth"]), depth)
+                cv2.imwrite(str(OUTDIR_OBJ / rel_paths["annot"]), annot)
+                
+                ### 
+                # POINT CLOUD
+                ###
+                if subsamples > 0:
+                    points, colors = create_cloud(image, depth, K, subsamples)
+                    save_cloud(str(OUTDIR_OBJ / rel_paths["cloud"]), points.T, colors)
+
+                # update dataset info
+                try:
+                    info_poses = update_info(info_poses, paths, camera_model_name, pose, cam.lens, done_ambiguity)
+                except Exception:
+                    print("Object not present in the render, check the Blender scene file!")
+                    break
+
+                # VERY INEFFICIENT
+                # reload everything due to bug https://github.com/DIYer22/bpycv/issues/27
+                # TODO with suppress_stdout():
+                bpy.data.objects.remove(obj, do_unlink=True)
+                obj = import_objects(mesh, name)
+                bpy.ops.object.location_clear(clear_delta=True)
+                for o in list(walk_children(obj)) + [obj]: 
+                    o["inst_id"] = ANNOT_ID
+
+            info_poses.reset_index(drop=True)
+            info_poses.to_csv(paths["info"])
+
+            # save blend file for debug purposes
+            bpy.ops.wm.save_as_mainfile(filepath=paths["blend"])
+
+            # finally remove the object
+            bpy.data.objects.remove(obj, do_unlink=True)
+
+
+    # REFORMAT AS SINGLE DATASET
+    if args.dataset_type == "simple":
+        raise NotImplementedError("SIMPLE dataset format is not yet implemented")
+        if args.classes == "opt_total":
+            # mix all NAMES
+            classes = []
+        elif args.classes == "opt_classes":
+            # use all NAMES
+            classes = NAMES
+        elif isinstance(args.classes, list):
+            # check classes within NAMES
+            unknown_classes = set(args.classes) - set(NAMES)
+            if len(unknown_classes) > 0:
+                raise argparse.ArgumentError(f"Classes {unknown_classes} are not known")
+            classes = args.classes
+        elif isinstance(args.classes, str):
+            # check class within NAMES
+            if args.classes not in NAMES:
+                raise argparse.ArgumentError(f"Class {args.classes} is not known")
+            classes = [args.classes]
+        else:
+            raise argparse.ArgumentError(f"Provided classes are not supported: {args.classes}")
+        
+        create_simple_dataset(OUTDIR, OUTDIR / f"dataset_{args.dataset_type.upper()}", classes, args.split)
+    else:
+        print("No dataset type specified, leaving as is")
+
+
+if __name__ == "__main__":
+    args = sys.argv[5:]  # skip the "blender.exe -b --python simulator.py --" arguments (required due to Blender argument bypass)
+    main(args)
