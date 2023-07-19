@@ -48,7 +48,7 @@ def import_objects(path: Path, name: str = None):
 
 
 def look_at(obj_camera, obj_focused, roll=0):
-    # use world coordinates to 
+    # use world coordinates to
     direction = obj_focused.location - obj_camera.location
     # point the cameras '-Z' and use its 'Y' as up
     obj_camera.rotation_mode = "QUATERNION"
@@ -57,7 +57,7 @@ def look_at(obj_camera, obj_focused, roll=0):
     # angle = m.radians(-90) if max(obj_focused.dimensions.x, obj_focused.dimensions.y) < obj_focused.dimensions.z else 0
     if roll is None:
         roll = np.random.uniform(-1, 1) * (2*np.pi)
-    obj_camera.rotation_quaternion @= mathutils.Quaternion((0, 0, 1), roll)
+    obj_camera.rotation_quaternion @= mathutils.Quaternion(mathutils.Vector((0, 0, 1)), roll)
 
 
 def set_cam_intrinsics(K, f, hw=None, cam=bpy.data.cameras["Camera"]):
@@ -73,7 +73,7 @@ def set_cam_intrinsics_params(fx, fy, cx, cy, f, hw, cam, scale=1):
         hw = (int(cy*2), int(cx*2))
     if cam is None:
         cam = bpy.data.cameras["Camera"]
-    
+
     h, w = hw
     if f is not None:
         sw = f / fx * w
@@ -102,12 +102,12 @@ def set_cam_intrinsics_params(fx, fy, cx, cy, f, hw, cam, scale=1):
     cam.sensor_height = sh
     cam.shift_x = +(0.5 - cx / w)
     cam.shift_y = -(0.5 - cy / h)
-    bpy.context.scene.render.resolution_x = w / scale
-    bpy.context.scene.render.resolution_y = h / scale
+    bpy.context.scene.render.resolution_x = int(w / scale)
+    bpy.context.scene.render.resolution_y = int(h / scale)
     bpy.context.scene.render.resolution_percentage = scale * 100
     bpy.context.scene.render.pixel_aspect_x = 1.0
     bpy.context.scene.render.pixel_aspect_y = 1.0
-    return (h, w)
+    return h, w
 
 
 def walk_children(ob, level=0, max_level=50, type='MESH'):
@@ -165,5 +165,3 @@ def traj_random_sphere(t, min_radius, obj_focused, obj_camera, translation_noise
     obj_camera.location = pos
     look_at(obj_camera, obj_focused, roll=None)
     obj_camera.location += mathutils.Vector(noise)
-
-

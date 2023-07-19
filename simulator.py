@@ -45,55 +45,55 @@ def parse_args(args):
         prog="ScanSim",
         description="Blender 3D scanner simulator for Point Cloud and RGB-D synthetic dataset creation",
     )
-    parser.add_argument("outdir", metavar="OUTDIR", 
-                        type=str, 
+    parser.add_argument("outdir", metavar="OUTDIR",
+                        type=str,
                         help="Output path for the datasets (grouped by mesh by default)")
-    parser.add_argument("examples", metavar="EXAMPLES", 
-                        type=int, default=1000, 
+    parser.add_argument("examples", metavar="EXAMPLES",
+                        type=int, default=1000,
                         help="Number of samples to acquire for each mesh (defaults to 1000)")
-    parser.add_argument("-M", "--meshes", metavar="MESHES", 
+    parser.add_argument("-M", "--meshes", metavar="MESHES",
                         type=str, nargs='+', required=True,
                         help="STL/GLB/OBJ filepaths of the objects to be scanned (individually)")
-    parser.add_argument("-P", "--params", metavar="PARAMS", 
+    parser.add_argument("-P", "--params", metavar="PARAMS",
                         type=str, nargs='+', required=True,
                         help="YAML filepaths of the camera parameters (randomly chosen during scanning)")
-    parser.add_argument("-n", "--mesh_names", metavar="MESH_NAMES", 
+    parser.add_argument("-n", "--mesh_names", metavar="MESH_NAMES",
                         type=str, nargs='+', default=None,
                         help="Force a specific name for each mesh")
-    parser.add_argument("-m", "--meters", 
+    parser.add_argument("-m", "--meters",
                         action="store_true",
                         help="Use meter unit instead of millimiter (because the meshes are given in meter unit)")
-    parser.add_argument("-s", "--samples", metavar="SAMPLES", 
-                        type=int, default=1500, 
+    parser.add_argument("-s", "--samples", metavar="SAMPLES",
+                        type=int, default=1500,
                         help="Number of random points to save after 3D scan")
-    parser.add_argument("-t", "--trajectory", metavar="TRAJECTORY", 
-                        type=str, choices=["random_barrel", "random_sphere", "spiral_barrel"], default="spiral_barrel", 
+    parser.add_argument("-t", "--trajectory", metavar="TRAJECTORY",
+                        type=str, choices=["random_barrel", "random_sphere", "spiral_barrel"], default="spiral_barrel",
                         help="Select the scanning trajectory")
-    parser.add_argument("-b", "--backgrounds", metavar="BACKGROUNDS", 
-                        type=str, nargs='*', default=None, 
+    parser.add_argument("-b", "--backgrounds", metavar="BACKGROUNDS",
+                        type=str, nargs='*', default=None,
                         help="Path for the optional backgound images")
-    parser.add_argument("-d", "--depth_ambiguity", metavar="AMBIGUITY", 
-                        type=float, default=0.0, 
+    parser.add_argument("-d", "--depth_ambiguity", metavar="AMBIGUITY",
+                        type=float, default=0.0,
                         help="Probability of repeating the previous pose with a different f/z setup")
-    parser.add_argument("-j", "--jiggle_camera", metavar="JIGGLE", 
-                        type=float, default=0.0, 
+    parser.add_argument("-j", "--jiggle_camera", metavar="JIGGLE",
+                        type=float, default=0.0,
                         help="Magnitude of the xyz-translation noise of the camera from the trajectory")
-    parser.add_argument("-z", "--zoom", metavar="ZOOM", 
-                        type=float, default=1.0, 
+    parser.add_argument("-z", "--zoom", metavar="ZOOM",
+                        type=float, default=1.0,
                         help="Amplification of the automatically calculated minimum cam distance")
-    parser.add_argument("-hw", "--resolution", metavar="HW", 
-                        type=int, nargs="2", default=None, 
+    parser.add_argument("-hw", "--resolution", metavar="HW",
+                        type=int, nargs=2, default=None,
                         help="Resolution of the image")
-        
+
     parser_dataset = parser.add_subparsers(dest='dataset_type', help='Arguments for specific dataset type output')
     parser_dataset.required = False
-    
+
     parser_simple = parser_dataset.add_parser('simple')
     parser_simple.add_argument('--classes', metavar="SIMPLE_CLASSES",
-                               type=str, nargs="?", const="opt_classes", default="opt_total", 
+                               type=str, nargs="?", const="opt_classes", default="opt_total",
                                help='Split size of the dataset')
     parser_simple.add_argument('--split', metavar="SIMPLE_SPLIT",
-                               type=float, default=0.8, 
+                               type=float, default=0.8,
                                help='Split size of the dataset')
 
     args = parser.parse_args(args)
@@ -144,8 +144,8 @@ def main(args):
     PARAMS = {path.stem.split("_", 1)[1]: path for path in PARAMS}
     if len(PARAMS) == 0:
         raise argparse.ArgumentError("No parameter files found!")
-    HW = tuple([abs(v) for v in args.resolution])
-    
+    HW = None if args.resolution is None else tuple([abs(v) for v in args.resolution])
+
     OUTDIR = Path(args.outdir).resolve()
     OUTDIR.mkdir(parents=True, exist_ok=True)
 
@@ -154,7 +154,7 @@ def main(args):
         for bg_path in args.backgrounds:
             bg_path = Path(bg_path).resolve()
             BACKGROUNDS += [bg_path] if bg_path.is_file() else list(bg_path.iterdir())
-    
+
     EXAMPLES = args.examples
     ANNOT_ID = 1
     CLOUD_SAMPLES = args.samples
@@ -189,8 +189,8 @@ def main(args):
     light_intensity = 25.00
 
     for i, mesh in enumerate(MESHES):
-        
-        # TODO this feels very wrong, and should be removed to 
+
+        # TODO this feels very wrong, and should be removed to
         with suppress_stdout():
 
             ##################################
@@ -207,7 +207,7 @@ def main(args):
             # selection is needed for the following command, but the object is already selected when just imported
             bpy.ops.object.location_clear(clear_delta=True)
             # give the object a unique id for annotation and 6D pose with bpycv
-            for o in list(walk_children(obj)) + [obj]: 
+            for o in list(walk_children(obj)) + [obj]:
                 o["inst_id"] = ANNOT_ID
 
             ##################################
@@ -225,7 +225,7 @@ def main(args):
             obj_dims = walk_dimensions(obj)
             cam_min_radius = 1.25 * minimum_cam_distance_cam(cam, obj_dims) / DEPTH_ZOOM
             # setup camera frustum (for Z-buffer)
-            cam.clip_end = 10.0 *  DEPTH_ZOOM * cam_min_radius  # * ((max(obj_dims) * SCALE) / args.jiggle_camera)
+            cam.clip_end = 10.0 * DEPTH_ZOOM * cam_min_radius  # * ((max(obj_dims) * SCALE) / args.jiggle_camera)
             # setup lighting
             light.shadow_soft_size = 2 * cam_min_radius
             light.energy = 4*np.pi*light_intensity * cam_min_radius ** 2
@@ -251,12 +251,12 @@ def main(args):
 
             # TODO for some weird reason, this prints even with the stdout redirect... magic...
             for i in tqdm(range(EXAMPLES), desc=name):
-                            
+
                 # load intrinsics from file
                 K, f, camera_model_name = get_random_camera_setup(PARAMS)
                 H, W = set_cam_intrinsics(K, f, HW, cam=cam)
                 subsamples = min(CLOUD_SAMPLES, H * W)
-                
+
                 # relative paths
                 rel_paths = {
                     "image": str(IMAGES_DIR / f"{i}.png"),
@@ -272,7 +272,7 @@ def main(args):
                     t = i / max(1, (EXAMPLES - 1))
                     CAMERA_POSITIONING(t, cam_min_radius, obj, obj_cam, args.jiggle_camera)
                     obj_light.location = obj_cam.location
-                    
+
                     # choose a background image
                     if BACKGROUNDS:
                         bg_img = rnd.choice(BACKGROUNDS)
@@ -294,23 +294,23 @@ def main(args):
                 # works only when Blender is in windowed mode (not in CLI)
                 #bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
                 ###########################################################
-                
+
                 # # quick and easy render
                 # bpy.context.scene.render.filepath = paths["image"]
                 # bpy.ops.render.render(write_still=True)
-                
+
                 # TODO with suppress_stdout():
                 # render image, instance annotation and depth in one line code
                 frame_data = bpycv.render_data()
 
-                # since we are saving everything in CV convention, we need to flip the vertical direction due to the 
+                # since we are saving everything in CV convention, we need to flip the vertical direction due to the
                 # difference between the Blender and CV cameras
                 image = np.flipud(frame_data["image"])
                 depth = np.flipud(frame_data["depth"])  # in meters
                 annot = np.flipud(frame_data["inst"])
                 pose = frame_data["ycb_6d_pose"]  # 6D pose in YCB format
-                
-                ### 
+
+                ###
                 # IMAGE, DEPTH and ANNOTATIONS
                 ###
 
@@ -321,8 +321,8 @@ def main(args):
                 cv2.imwrite(str(OUTDIR_OBJ / rel_paths["image"]), image[:,:,::-1])  # BGR to RGB
                 cv2.imwrite(str(OUTDIR_OBJ / rel_paths["depth"]), depth)
                 cv2.imwrite(str(OUTDIR_OBJ / rel_paths["annot"]), annot)
-                
-                ### 
+
+                ###
                 # POINT CLOUD
                 ###
                 if subsamples > 0:
@@ -342,7 +342,7 @@ def main(args):
                 bpy.data.objects.remove(obj, do_unlink=True)
                 obj = import_objects(mesh, name)
                 bpy.ops.object.location_clear(clear_delta=True)
-                for o in list(walk_children(obj)) + [obj]: 
+                for o in list(walk_children(obj)) + [obj]:
                     o["inst_id"] = ANNOT_ID
 
             info_poses.reset_index(drop=True)
@@ -358,27 +358,27 @@ def main(args):
     # REFORMAT AS SINGLE DATASET
     if args.dataset_type == "simple":
         raise NotImplementedError("SIMPLE dataset format is not yet implemented")
-        if args.classes == "opt_total":
-            # mix all NAMES
-            classes = []
-        elif args.classes == "opt_classes":
-            # use all NAMES
-            classes = NAMES
-        elif isinstance(args.classes, list):
-            # check classes within NAMES
-            unknown_classes = set(args.classes) - set(NAMES)
-            if len(unknown_classes) > 0:
-                raise argparse.ArgumentError(f"Classes {unknown_classes} are not known")
-            classes = args.classes
-        elif isinstance(args.classes, str):
-            # check class within NAMES
-            if args.classes not in NAMES:
-                raise argparse.ArgumentError(f"Class {args.classes} is not known")
-            classes = [args.classes]
-        else:
-            raise argparse.ArgumentError(f"Provided classes are not supported: {args.classes}")
-        
-        create_simple_dataset(OUTDIR, OUTDIR / f"dataset_{args.dataset_type.upper()}", classes, args.split)
+        # if args.classes == "opt_total":
+        #     # mix all NAMES
+        #     classes = []
+        # elif args.classes == "opt_classes":
+        #     # use all NAMES
+        #     classes = NAMES
+        # elif isinstance(args.classes, list):
+        #     # check classes within NAMES
+        #     unknown_classes = set(args.classes) - set(NAMES)
+        #     if len(unknown_classes) > 0:
+        #         raise argparse.ArgumentError(f"Classes {unknown_classes} are not known")
+        #     classes = args.classes
+        # elif isinstance(args.classes, str):
+        #     # check class within NAMES
+        #     if args.classes not in NAMES:
+        #         raise argparse.ArgumentError(f"Class {args.classes} is not known")
+        #     classes = [args.classes]
+        # else:
+        #     raise argparse.ArgumentError(f"Provided classes are not supported: {args.classes}")
+        #
+        # create_simple_dataset(OUTDIR, OUTDIR / f"dataset_{args.dataset_type.upper()}", classes, args.split)
     else:
         print("No dataset type specified, leaving as is")
 
