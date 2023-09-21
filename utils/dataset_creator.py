@@ -38,8 +38,8 @@ def create_info():
         f"P_T{i}" for i in range(1, 4)
     ] + [
         # vertices in bb2obj space
-        i 
-        for l in [[f"BB_{w}{i}" for w in ["x", "y", "z"]] for i in range(8)] 
+        i
+        for l in [[f"BB_{w}{i}" for w in ["x", "y", "z"]] for i in range(8)]
         for i in l
     ] + [
         # depth_ambiguity
@@ -106,12 +106,12 @@ def create_cloud(image, depth, K, samples):
     # prepare the grid
     h, w, _ = image.shape
     u, v = np.meshgrid(np.arange(w), np.arange(h), indexing="xy")
-    # filter clipped points (they are outside frustum, Blender sets their value to 0) 
+    # filter clipped points (they are outside frustum, Blender sets their value to 0)
     u, v, z = u[depth > 0], v[depth > 0], depth[depth > 0]
     # random subsampling of pixels
-    idxs = rnd.choices(np.arange(z.shape[0]), k=samples)
+    idxs = rnd.choice(np.arange(z.shape[0]), samples)
     u, v, z = u[idxs], v[idxs], z[idxs]
-    
+
     # anti-project the homogeneous points and select the colors
     p = np.vstack([u, v, np.ones(u.shape)])
     points = U @ np.linalg.inv(K) @ p * z  # TODO maybe U is useless
@@ -140,7 +140,7 @@ def add_background(image, mask, backgound, augment=True):
     if fw > bw:
         bh, bw = int(fw / bw * bh), fw
         backgound = cv2.resize(backgound, (bw, bh))
-    
+
     y = (bh - fh) * .5
     x = (bw - fw) * .5
     back = backgound[int(y):int(y+fh), int(x):int(x+fw), :]
@@ -155,7 +155,7 @@ def add_background(image, mask, backgound, augment=True):
         back = cv2.warpAffine(back, M, (bw, bh))
         if rnd.choice(a=[False, True]):
             back = cv2.flip(back, flipCode=1)
-    
+
     back[mask, :] = image[mask, :]
 
     return back
@@ -177,12 +177,12 @@ def get_model_info(filepath):
     dist = np.linalg.norm(p1-p2)
 
     data = {
-        'diameter': dist, 
-        'min_x': min_coord[0], 
-        'min_y': min_coord[1], 
-        'min_z': min_coord[2], 
-        'size_x': box_size[0], 
-        'size_y': box_size[1], 
+        'diameter': dist,
+        'min_x': min_coord[0],
+        'min_y': min_coord[1],
+        'min_z': min_coord[2],
+        'size_x': box_size[0],
+        'size_y': box_size[1],
         'size_z': box_size[2]
     }
     return data
@@ -212,12 +212,12 @@ def create_simple_dataset(path_data: Path, path_output: Path, classes: list, spl
         training_idxs = rnd.choice(info.shape[0], int(info.shape[0] * split), replace=False)
         info.loc[training_idxs, ("training")] = True
 
-        
-    
 
 
 
-    
+
+
+
 # LINEMOD
 # - data/
 #   - 01/
