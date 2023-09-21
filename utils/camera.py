@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 from ruamel.yaml import YAML
 
@@ -10,13 +11,19 @@ class Camera(object):
         self.offset_x, self.offset_y = offset
         self.compute_intrinsics(hw)
     
+
     def __init__(self, K, f, hw=None):
+        fx, fy, cx, cy, _ = Camera.unpack_K(K)
+        self.__init__(f, fx, fy, cx, cy)
+    
+
+    def __init__(self, f, fx, fy, cx, cy, hw=None):
         super().__init__()
         self.focal = f
-        self.fx, self.fy, self.cx, self.cy, _ = Camera.unpack_K(K)
+        self.fx, self.fy, self.cx, self.cy = fx, fy, cx, cy
         self.compute_camera(hw)
-
     
+
     def compute_intrinsics(self, hw):
         if not hw:
             return
@@ -58,21 +65,34 @@ class Camera(object):
 
 
     @staticmethod
-    def pack_K(fx, fy, cx, cy, s=0.0):
+    def pack_K(fx, fy, cx, cy, sk=np.pi/2):
         K = np.eye(3)
         K[0,0] = fx
-        K[1,1] = fy
+        K[1,1] = fy / np.sin(sk)
         K[0,2] = cx
         K[1,2] = cy
-        K[0,1] = s
+        K[0,1] = -fx / np.tan(sk) 
         return K
 
 
     @staticmethod
     def unpack_K(K):
         K /= K[2,2]
-        fx, fy, cx, cy, s = K[0,0], K[1,1], K[0,2], K[1,2], K[0,1]
-        return fx, fy, cx, cy, s
+        fx, fy, cx, cy, ys = K[0,0], K[1,1], K[0,2], K[1,2], K[0,1]
+        if ys == 0.0:
+            # assume the skew is 90 degrees, which actually requires -0.0
+            ys = -0.0
+        sk = np.arctan(-fx / ys)
+        fy = fy * np.sin(sk)
+        return fx, fy, cx, cy, sk
+
+
+    @staticmethod
+    def pack_G(r, t):
+        G = np.zeros((3, 4))
+        G[:, :3] = cv2.Rodrigues(r)[0]
+        G[:, 3] = t
+        return G
 
 
     @staticmethod
@@ -83,13 +103,15 @@ class Camera(object):
             T[0][3], T[1][3], T[2][3]
 
 
-def load_intrinsics(path):
+import sys
+def load_params(path):
     yaml = YAML()
     with open(path, "r") as f:
         params = yaml.load(f)
     K = Camera.pack_K(params["cam_fx"], params["cam_fy"], params["cam_cx"], params["cam_cy"], params["cam_sk"])
     f = params.setdefault("cam_f", None)
-    return K, f
+    G = Camera.pack_G(np.array(params["pose_r"]), np.array(params["pose_t"]))
+    return K, f, G
 
 
 # get the minimum distance of the camera to frame the whole target from intrinsics

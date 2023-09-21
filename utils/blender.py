@@ -1,4 +1,5 @@
 import bpy
+import bpycv
 import mathutils
 import numpy as np
 from pathlib import Path
@@ -47,66 +48,97 @@ def import_objects(path: Path, name: str = None):
     return par
 
 
-def look_at(obj_camera, obj_focused, roll=0):
-    # use world coordinates to 
-    direction = obj_focused.location - obj_camera.location
+def look_at(cam, obj, roll=0):
+    K = bpycv.camera_utils.get_cam_intrinsic(cam)
+    cx, cy, f = K[0][2], K[1][2], cam.data.lens
+    h, w = bpy.context.scene.render.resolution_x, bpy.context.scene.render.resolution_y
+
     # point the cameras '-Z' and use its 'Y' as up
-    obj_camera.rotation_mode = "QUATERNION"
-    obj_camera.rotation_quaternion = direction.to_track_quat('-Z', 'Y')
-    # # rotate camera if height is bigger than base
+    direction = obj.location - cam.location
+    track_quat = direction.to_track_quat('-Z', 'Y').normalized()
+
+    # # find the rotation that brings the object origin to the image center
+    # Qinv = track_quat.to_matrix().transposed() @ K.inverted()
+    # v_center = Qinv @ mathutils.Vector((w/2, h/2, 1))
+    # v_origin = Qinv @ mathutils.Vector((cx, cy, 1))
+    # cvcam_to_bcam_quat = mathutils.Quaternion((1, 0, 0), np.pi)
+    
+
+    # track_quat rotates camera's -Z towards the object's location
+    # align_quat rotates the image center optical ray to the camera's principal point optical ray 
+    # roll_quat rotates the camera along Z
+
+    # TODO check CameraRotationOffset.blend to automatize this
+    align_quat = mathutils.Euler(np.deg2rad([-0.9, -6.8, 0]), "ZYX").to_quaternion()
+
+    # rotate camera if height is bigger than base
     # angle = m.radians(-90) if max(obj_focused.dimensions.x, obj_focused.dimensions.y) < obj_focused.dimensions.z else 0
-    if roll is None:
-        roll = np.random.uniform(-1, 1) * (2*np.pi)
-    obj_camera.rotation_quaternion @= mathutils.Quaternion((0, 0, 1), roll)
+    
+    # roll camera about it's center axis
+    roll = np.random.uniform(-1, 1) * (2*np.pi) if roll is None else roll
+    roll_quat = mathutils.Quaternion((0, 0, 1), roll)
+
+    # set the rotation
+    cam.rotation_mode = "QUATERNION"
+    cam.rotation_quaternion = track_quat @ roll_quat @ align_quat
 
 
-def set_cam_intrinsics(K, f, hw=None, cam=bpy.data.cameras["Camera"]):
-    # Blender ignores camera skew, so no  K[0,1]  here
-    return set_cam_intrinsics_params(K[0,0], K[1,1], K[0,2], K[1,2], f, hw, cam)
+def set_cam_intrinsics(K, f, hw=None, cam=bpy.data.objects["Camera"]):
+    # Blender ignores camera skew, so no  K[0,1]  here, but we still need to check it
+    sk = np.arctan(-K[0,0] / K[0,1])
+    if np.allclose(sk, np.pi/2, atol=0.5):
+        print("Image will appear flipped vertically")
+    elif np.allclose(sk, -np.pi/2, atol=0.5):
+        print("Image will appear correct vertically")
+    else:
+        raise Exception(f"Blender doesn't work with non-orthogonal skew ({np.rad2deg(sk)})")
+
+    return set_cam_intrinsics_params(K[0,0], K[1,1], K[0,2], K[1,2], f, hw, cam.data)
+    # bpycv.camera_utils.set_cam_intrinsic(cam, K, hw)
+    # return bpy.context.scene.render.resolution_y, bpy.context.scene.render.resolution_x
 
 
 # mimics bpycv.set_cam_intrinsics()
-def set_cam_intrinsics_params(fx, fy, cx, cy, f, hw, cam, scale=1):
+def set_cam_intrinsics_params(fx, fy, cx, cy, f, hw, cam=bpy.data.cameras["Camera"]):
+    # https://github.com/DLR-RM/BlenderProc/blob/main/blenderproc/python/camera/CameraUtility.py#L226
     if hw is None:
-        # resolution is set to give (cx,cy) = (0,0)
-        # this implies (shift_x, shift_y) = (0, 0)
+        # resolution is set to give (cx,cy) = (w/2,h/2), which implies (shift_x,shift_y) = (0,0)
         hw = (int(cy*2), int(cx*2))
-    if cam is None:
-        cam = bpy.data.cameras["Camera"]
-    
     h, w = hw
-    if f is not None:
-        sw = f / fx * w
-        sh = f / fy * h
-    else:
-        # https://blender.stackexchange.com/a/40835
-        # TODO include aspect ratio in  f  calculation
-        if h > w:
-            sw = 1  # assumption
-            sh = fx * h / (fy * w)
-            Ky = h / sh
-            f = fy / Ky
-        elif h < w:
-            sw = fy * w / (fx * h)
-            sh = 1  # assumption
-            Kx = w / sw
-            f = fx / Kx
-        else:
-            sw = 1  # assumption
-            sh = 1  # assumption
-            Kx = w / sw
-            f = fx / Kx
+
+    # some preliminary stuff
+    pixel_aspect_ratio = fx / fy
+    image_aspect_ratio = w / h
+    horizontal_sensor_fit = (image_aspect_ratio >= pixel_aspect_ratio)  # width > height ?
+    
+    # work out f if needed
+    if f is None:
+        f = fy / h if horizontal_sensor_fit else fx / w
     cam.lens = f
-    cam.sensor_fit = 'AUTO'
-    cam.sensor_width = sw
-    cam.sensor_height = sh
-    cam.shift_x = +(0.5 - cx / w)
-    cam.shift_y = -(0.5 - cy / h)
-    bpy.context.scene.render.resolution_x = w / scale
-    bpy.context.scene.render.resolution_y = h / scale
-    bpy.context.scene.render.resolution_percentage = scale * 100
-    bpy.context.scene.render.pixel_aspect_x = 1.0
-    bpy.context.scene.render.pixel_aspect_y = 1.0
+
+    # these are values of a sensor with one dimension set to 1 and the other calculated accordingly
+    # sw = f / fx * w
+    # sh = f / fy * h
+    # these unfortunately don't work in blender, which calculates things differently, so
+    if horizontal_sensor_fit:
+        cam.sensor_fit = "HORIZONTAL"
+        cam.sensor_width = w / h
+    else:
+        cam.sensor_fit = "VERTICAL"
+        cam.sensor_height = h / w
+    
+    # here some magic to work out the shift
+    view_fac_in_px = w if horizontal_sensor_fit else h * pixel_aspect_ratio
+    cam.shift_x = - (cx - (w - 1) / 2) / view_fac_in_px
+    cam.shift_y = + (cy - (h - 1) / 2) / view_fac_in_px * pixel_aspect_ratio
+
+    bpy.context.scene.render.resolution_x = w
+    bpy.context.scene.render.resolution_y = h
+    bpy.context.scene.render.resolution_percentage = 100
+    pixel_aspect_x, pixel_aspect_y = (1, pixel_aspect_ratio) if fx >= fy else (1/pixel_aspect_ratio, 1)
+    bpy.context.scene.render.pixel_aspect_x = pixel_aspect_x
+    bpy.context.scene.render.pixel_aspect_y = pixel_aspect_y
+
     return (h, w)
 
 
@@ -137,12 +169,9 @@ def walk_dimensions(obj):
 # fetch the necessary inputs directly from the camera
 def minimum_cam_distance_cam(cam, dims):
     h, w = bpy.context.scene.render.resolution_y, bpy.context.scene.render.resolution_x
-    f = cam.lens
-    fx = f * w / cam.sensor_width
-    fy = f * h / cam.sensor_height
-    cx = (0.5 - cam.shift_x) * w
-    cy = (cam.shift_y + 0.5) * h
-    K = Camera.pack_K(fx, fy, cx, cy, 0)
+    f = cam.data.lens
+    K = bpycv.camera_utils.get_cam_intrinsic(cam)
+    K = np.array(K)
     return minimum_cam_distance(K, f, (h, w), dims)
 
 
@@ -150,20 +179,20 @@ def traj_random_barrel(t, min_radius, obj_focused, obj_camera, translation_noise
     pos, noise = standard_traj((_init_random_traj, _barrel_positioning), t, min_radius, obj_focused.dimensions.z, translation_noise)
     obj_camera.location = pos
     look_at(obj_camera, obj_focused, roll=None)
-    obj_camera.location += mathutils.Vector(noise)
+    # obj_camera.location += mathutils.Vector(noise)
 
 
 def traj_spiral_barrel(t, min_radius, obj_focused, obj_camera, translation_noise=0):
     pos, noise = standard_traj((_init_spiral_traj, _barrel_positioning), t, min_radius, obj_focused.dimensions.z, translation_noise)
     obj_camera.location = pos
     look_at(obj_camera, obj_focused, roll=None)
-    obj_camera.location += mathutils.Vector(noise)
+    # obj_camera.location += mathutils.Vector(noise)
 
 
 def traj_random_sphere(t, min_radius, obj_focused, obj_camera, translation_noise=0):
     pos, noise = standard_traj((_init_random_traj, _sphere_positioning), t, min_radius, None, translation_noise)
     obj_camera.location = pos
     look_at(obj_camera, obj_focused, roll=None)
-    obj_camera.location += mathutils.Vector(noise)
+    # obj_camera.location += mathutils.Vector(noise)
 
 

@@ -82,7 +82,7 @@ def parse_args(args):
                         type=float, default=1.0, 
                         help="Amplification of the automatically calculated minimum cam distance")
     parser.add_argument("-hw", "--resolution", metavar="HW", 
-                        type=int, nargs="2", default=None, 
+                        type=int, nargs=2, default=None, 
                         help="Resolution of the image")
         
     parser_dataset = parser.add_subparsers(dest='dataset_type', help='Arguments for specific dataset type output')
@@ -114,8 +114,8 @@ def get_camera_positioner(traj):
 
 def get_random_camera_setup(filepaths):
     camera_model_name = rnd.choice(list(filepaths.keys()))
-    K, f = load_intrinsics(filepaths[camera_model_name])
-    return K, f, camera_model_name
+    K, f, G = load_params(filepaths[camera_model_name])
+    return K, f, G, camera_model_name
 
 
 def main(args):
@@ -137,14 +137,14 @@ def main(args):
         NAMES = [path.stem for path in MESHES]
     PARAMS = [Path(params).resolve() for params in args.params]
     if len(PARAMS) == 1 and PARAMS[0].is_dir():
-        PARAMS = list(PARAMS[0].glob("params_*.yml"))
+        PARAMS = list(PARAMS[0].glob("*.[yml yaml]*"))
     for params in PARAMS:
-        if not params.match("params_*.yml"):
-            raise argparse.ArgumentError("Parameters filenames must be params_CAMERANAME.yml")
+        if not params.match("*.[yml yaml]*"):
+            raise argparse.ArgumentError("Parameters filenames must be CAMERANAME.yml")
     PARAMS = {path.stem.split("_", 1)[1]: path for path in PARAMS}
     if len(PARAMS) == 0:
         raise argparse.ArgumentError("No parameter files found!")
-    HW = tuple([abs(v) for v in args.resolution])
+    HW = tuple([abs(v) for v in args.resolution]) if args.resolution is not None else None
     
     OUTDIR = Path(args.outdir).resolve()
     OUTDIR.mkdir(parents=True, exist_ok=True)
@@ -165,7 +165,7 @@ def main(args):
     # set metric units and meter as base (for depth images)
     bpy.context.scene.unit_settings.system = 'METRIC'
     bpy.context.scene.unit_settings.scale_length = 1.0 if args.meters else 0.001
-    bpy.context.scene.unit_settings.length_unit = 'METERS' if args.meters else 'MILLIMETERS'
+    # bpy.context.scene.unit_settings.length_unit = 'METERS' if args.meters else 'MILLIMETERS'
 
     # Blender default file (userpref.blend) contains three objects: Camera, Cube, and Light
     # here we remove the default Cube, leaving only Camera and Light
@@ -175,18 +175,16 @@ def main(args):
 
 
     # CAMERA AND LIGHT SETUP
-    cam = bpy.data.cameras["Camera"]
-    light = bpy.data.lights["Light"]
-    obj_cam = bpy.data.objects["Camera"]
-    obj_light = bpy.data.objects["Light"]
+    cam = bpy.data.objects["Camera"]
+    light = bpy.data.objects["Light"]
     # setup world background
     bpy.context.scene.world.use_nodes = False
     bpy.context.scene.world.color = mathutils.Color((0, 0, 0))
     # trajectory
     CAMERA_POSITIONING = get_camera_positioner(args.trajectory)
-    cam.clip_start = 0.1
+    cam.data.clip_start = 0.1
     # light
-    light_intensity = 25.00
+    light_lumens = 25.0
 
     for i, mesh in enumerate(MESHES):
         
@@ -204,6 +202,7 @@ def main(args):
             # TODO with suppress_stdout():
             # load custom object at world origin (this also activates, and thus selects, the object)
             obj = import_objects(mesh, name)
+            obj_dims = walk_dimensions(obj)
             # selection is needed for the following command, but the object is already selected when just imported
             bpy.ops.object.location_clear(clear_delta=True)
             # give the object a unique id for annotation and 6D pose with bpycv
@@ -221,15 +220,6 @@ def main(args):
                 "mesh":  str(OUTDIR_OBJ / f"{name}{mesh.suffix}")
             }
 
-            # orbit around the object
-            obj_dims = walk_dimensions(obj)
-            cam_min_radius = 1.25 * minimum_cam_distance_cam(cam, obj_dims) / DEPTH_ZOOM
-            # setup camera frustum (for Z-buffer)
-            cam.clip_end = 10.0 *  DEPTH_ZOOM * cam_min_radius  # * ((max(obj_dims) * SCALE) / args.jiggle_camera)
-            # setup lighting
-            light.shadow_soft_size = 2 * cam_min_radius
-            light.energy = 4*np.pi*light_intensity * cam_min_radius ** 2
-
             # prepare dataframe
             info_poses = create_info()
             done_ambiguity = True
@@ -237,7 +227,7 @@ def main(args):
             # copy the mesh object
             deselect_everything()
             obj.select_set(True)
-            bpy.ops.export_scene.obj(filepath=str(paths["mesh"]), use_selection=True, use_materials=True)
+            bpy.ops.export_scene.obj(filepath=str(paths["mesh"]), axis_forward='Y', axis_up='Z', use_selection=True, use_materials=True)
 
             # create output directories
             IMAGES_DIR = Path("images")
@@ -249,14 +239,24 @@ def main(args):
             CLOUDS_DIR = Path("clouds")
             (OUTDIR_OBJ / CLOUDS_DIR).mkdir(exist_ok=True)
 
-            # TODO for some weird reason, this prints even with the stdout redirect... magic...
+            # tqdm prints on stderr, so it won't be suppressed
             for i in tqdm(range(EXAMPLES), desc=name):
                             
                 # load intrinsics from file
-                K, f, camera_model_name = get_random_camera_setup(PARAMS)
+                K, f, G, camera_model_name = get_random_camera_setup(PARAMS)
                 H, W = set_cam_intrinsics(K, f, HW, cam=cam)
                 subsamples = min(CLOUD_SAMPLES, H * W)
-                
+
+                # orbit around the object
+                origin_distance = np.linalg.norm(G[:, 3])
+                visibility_distance = minimum_cam_distance_cam(cam, obj_dims)
+                cam_min_radius = 1.25 * max(origin_distance, visibility_distance) / DEPTH_ZOOM
+                # setup camera frustum (for Z-buffer)
+                cam.data.clip_end = 5.0 *  DEPTH_ZOOM * cam_min_radius  # * ((max(obj_dims) * SCALE) / args.jiggle_camera)
+                # setup lighting
+                light.data.shadow_soft_size = 2 * cam_min_radius
+                light.data.energy = light_lumens * 4*np.pi * cam_min_radius**2
+
                 # relative paths
                 rel_paths = {
                     "image": str(IMAGES_DIR / f"{i}.png"),
@@ -270,8 +270,8 @@ def main(args):
                 if done_ambiguity or rnd.uniform(0, 1) > DEPTH_AMBIGUITY:
                     # move camera and light around object and point towards object
                     t = i / max(1, (EXAMPLES - 1))
-                    CAMERA_POSITIONING(t, cam_min_radius, obj, obj_cam, args.jiggle_camera)
-                    obj_light.location = obj_cam.location
+                    CAMERA_POSITIONING(t, cam_min_radius, obj, cam, args.jiggle_camera)
+                    light.location = cam.location
                     
                     # choose a background image
                     if BACKGROUNDS:
@@ -279,14 +279,14 @@ def main(args):
                     done_ambiguity = False
                 else:
                     # TODO check sw vs fx
-                    z_direction = obj_cam.location.normalized()
-                    z_distance_from_obj = obj_cam.location.length
+                    z_direction = cam.location.normalized()
+                    z_distance_from_obj = cam.location.length
                     depth_ratio = f / z_distance_from_obj
                     new_z_distance_from_obj = z_distance_from_obj * rnd.uniform(1.0, 1.25)
                     new_f = new_z_distance_from_obj * depth_ratio
                     # set iso-perspective setup
-                    cam.lens = new_f
-                    obj_cam.location = z_direction * new_z_distance_from_obj
+                    cam.data.lens = new_f
+                    cam.location = z_direction * new_z_distance_from_obj
                     done_ambiguity = True
 
                 ###########################################################
@@ -303,11 +303,9 @@ def main(args):
                 # render image, instance annotation and depth in one line code
                 frame_data = bpycv.render_data()
 
-                # since we are saving everything in CV convention, we need to flip the vertical direction due to the 
-                # difference between the Blender and CV cameras
-                image = np.flipud(frame_data["image"])
-                depth = np.flipud(frame_data["depth"])  # in meters
-                annot = np.flipud(frame_data["inst"])
+                image = frame_data["image"]
+                depth = frame_data["depth"]  # in meters
+                annot = frame_data["inst"]
                 pose = frame_data["ycb_6d_pose"]  # 6D pose in YCB format
                 
                 ### 
@@ -331,9 +329,9 @@ def main(args):
 
                 # update dataset info
                 try:
-                    info_poses = update_info(info_poses, paths, camera_model_name, pose, cam.lens, done_ambiguity)
+                    info_poses = update_info(info_poses, paths, camera_model_name, pose, cam.data.lens, (H, W), done_ambiguity)
                 except Exception:
-                    print("Object not present in the render, check the Blender scene file!")
+                    print("\nObject not present in the render, check the Blender scene file!", file=sys.stderr)
                     break
 
                 # VERY INEFFICIENT

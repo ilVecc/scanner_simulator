@@ -50,7 +50,7 @@ def create_info():
     ])
 
 
-def update_info(info_poses: pd.DataFrame, paths: dict, camera_model_name:str, pose: dict, f: float, depth_ambiguity: bool):
+def update_info(info_poses: pd.DataFrame, paths: dict, camera_model_name:str, pose: dict, f: float, hw: tuple, depth_ambiguity: bool):
     ###
     # 6D POSES
     ###
@@ -78,6 +78,7 @@ def update_info(info_poses: pd.DataFrame, paths: dict, camera_model_name:str, po
     BB = pose["bound_boxs"][0]
     # calculate the center of projection of the object
     fx, fy, px, py, s = Camera.unpack_K(I)
+    h, w = hw
     tx, ty, tz = P[:3, 3]
     cx = fx * tx / tz + px
     cy = fy * ty / tz + py
@@ -88,9 +89,9 @@ def update_info(info_poses: pd.DataFrame, paths: dict, camera_model_name:str, po
             name,
             paths["mesh"], paths["image"], paths["depth"], paths["annot"], paths["cloud"],
             camera_model_name,
-            f, fx, fy, px, py, s, *Camera.decompose(E), *Camera.decompose(P),
-            depth_ambiguity,
+            f, fx, fy, px, py, s, h, w *Camera.decompose(E), *Camera.decompose(P),
             *BB[0], *BB[1], *BB[2], *BB[3], *BB[4], *BB[5], *BB[6], *BB[7],
+            depth_ambiguity,
             cx, cy, tz
         ]])  # this needs to be a 2D array, thus the [[ ]]
     )
