@@ -71,7 +71,7 @@ def parse_args(args):
                         help="Select the scanning trajectory")
     parser.add_argument("-b", "--backgrounds", metavar="BACKGROUNDS",
                         type=str, nargs='*', default=None,
-                        help="Path for the optional backgound images")
+                        help="Path for the optional background images")
     parser.add_argument("-d", "--depth_ambiguity", metavar="AMBIGUITY",
                         type=float, default=0.0,
                         help="Probability of repeating the previous pose with a different f/z setup")
