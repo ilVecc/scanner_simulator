@@ -6,12 +6,12 @@ Blender 3D scanner simulator for Point Cloud and RGB-D synthetic dataset creatio
 2. Install libraries into Blender's Python via `blender -b --python install_requirements.py`
 
 ## Usage
-Simply run 
+Simply run something like
 ```
-blender -b --python simulator.py -- OUTDIR EXAMPLES -M MESHES -P PARAMS 
+blender -b --python simulator.py -- OUTDIR/ IMAGES -M MESHES/ -P PARAMS/ 
 ```
 
 An elaborate example is 
 ```
-blender -b --python simulator.py -- DATASET 5000 -M MODEL.obj -P PARAMS.yml -n DATASET_NAME -s 0 -t random_sphere -d 0.0 -j 0.1 -z 1.25
+blender -b --python simulator.py -- DATASET/ 5000 -M MODEL.obj -P PARAMS.yml -n DATASET_NAME -s 0 -t random_sphere -d 0.0 -j 0.1 -z 1.25
 ```

@@ -48,7 +48,7 @@ def parse_args(args):
     parser.add_argument("outdir", metavar="OUTDIR",
                         type=str,
                         help="Output path for the datasets (grouped by mesh by default)")
-    parser.add_argument("examples", metavar="EXAMPLES",
+    parser.add_argument("examples", metavar="IMAGES",
                         type=int, default=1000,
                         help="Number of samples to acquire for each mesh (defaults to 1000)")
     parser.add_argument("-M", "--meshes", metavar="MESHES",
