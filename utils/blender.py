@@ -68,7 +68,8 @@ def look_at(cam, obj, roll=0):
     # align_quat rotates the image center optical ray to the camera's principal point optical ray 
     # roll_quat rotates the camera along Z
 
-    # TODO check CameraRotationOffset.blend to automatize this
+    # TODO check CameraRotationOffset.blend for insights on how to automatize this
+    #      these values have been obtained by trial-and-error
     align_quat = mathutils.Euler(np.deg2rad([-0.9, -6.8, 0]), "ZYX").to_quaternion()
 
     # rotate camera if height is bigger than base

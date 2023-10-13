@@ -330,8 +330,9 @@ def main(args):
                 # update dataset info
                 try:
                     info_poses = update_info(info_poses, paths, camera_model_name, pose, cam.data.lens, (H, W), done_ambiguity)
-                except Exception:
+                except Exception as ex:
                     print("\nObject not present in the render, check the Blender scene file!", file=sys.stderr)
+                    print(ex, file=sys.stderr)
                     break
 
                 # VERY INEFFICIENT

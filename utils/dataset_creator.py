@@ -27,6 +27,9 @@ def create_info():
         # I matrix
         "K_fx", "K_fy", "K_cx", "K_cy", "K_s"
     ] + [
+        # image size
+        "h", "w"
+    ] + [
         # E matrix
         f"E_R{i}{j}" for i in range(1, 4) for j in range(1, 4)
     ] + [
@@ -89,7 +92,7 @@ def update_info(info_poses: pd.DataFrame, paths: dict, camera_model_name:str, po
             name,
             paths["mesh"], paths["image"], paths["depth"], paths["annot"], paths["cloud"],
             camera_model_name,
-            f, fx, fy, px, py, s, h, w *Camera.decompose(E), *Camera.decompose(P),
+            f, fx, fy, px, py, s, h, w, *Camera.decompose(E), *Camera.decompose(P),
             *BB[0], *BB[1], *BB[2], *BB[3], *BB[4], *BB[5], *BB[6], *BB[7],
             depth_ambiguity,
             cx, cy, tz
