@@ -55,14 +55,7 @@ def look_at(cam, obj, roll=0):
 
     # point the cameras '-Z' and use its 'Y' as up
     direction = obj.location - cam.location
-    track_quat = direction.to_track_quat('-Z', 'Y').normalized()
-
-    # # find the rotation that brings the object origin to the image center
-    # Qinv = track_quat.to_matrix().transposed() @ K.inverted()
-    # v_center = Qinv @ mathutils.Vector((w/2, h/2, 1))
-    # v_origin = Qinv @ mathutils.Vector((cx, cy, 1))
-    # cvcam_to_bcam_quat = mathutils.Quaternion((1, 0, 0), np.pi)
-    
+    track_quat = direction.to_track_quat('-Z', 'Y').normalized()    
 
     # track_quat rotates camera's -Z towards the object's location
     # align_quat rotates the image center optical ray to the camera's principal point optical ray 
@@ -71,6 +64,11 @@ def look_at(cam, obj, roll=0):
     # TODO check CameraRotationOffset.blend for insights on how to automatize this
     #      these values have been obtained by trial-and-error
     align_quat = mathutils.Euler(np.deg2rad([-0.9, -6.8, 0]), "ZYX").to_quaternion()
+    # # find the rotation that brings the object origin to the image center
+    # Qinv = track_quat.to_matrix().transposed() @ K.inverted()
+    # v_center = Qinv @ mathutils.Vector((w/2, h/2, 1))
+    # v_origin = Qinv @ mathutils.Vector((cx, cy, 1))
+    # cvcam_to_bcam_quat = mathutils.Quaternion((1, 0, 0), np.pi)
 
     # rotate camera if height is bigger than base
     # angle = m.radians(-90) if max(obj_focused.dimensions.x, obj_focused.dimensions.y) < obj_focused.dimensions.z else 0
