@@ -11,7 +11,7 @@ Simply run something like
 blender -b --python simulator.py -- OUTDIR/ IMAGES -M MESHES/ -P PARAMS/ 
 ```
 
-An elaborate example is 
+An elaborate (and actually pretty standard) example is 
 ```
-blender -b --python simulator.py -- DATASET/ 5000 -M MODEL.obj -P PARAMS.yml -n DATASET_NAME -s 0 -t random_sphere -d 0.0 -j 0.1 -z 1.25
+blender -b --python simulator.py -- DATASET/ 5000 -M MODEL.obj -P PARAMS.yml -n DATASET_NAME -s 0 -t random_sphere -d 0.0 -j 0.1 -z 1.75 -hw 940 704
 ```
